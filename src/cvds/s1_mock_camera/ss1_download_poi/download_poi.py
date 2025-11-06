@@ -182,26 +182,26 @@ if __name__ == "__main__":
 
         # OSM tags (unchanged)
         tags = {
-            'amenity': True,
-            'shop': True,
-            'tourism': True,
-            'leisure': True,
-            'highway': True,
-            'building': True,
-            'healthcare': True,
-            'public_transport': True,
-            'office': True,
-            'craft': True,
-            'sport': True,
-            'religion': True,
-            'emergency': True,
-            'landuse': True,
-            'natural': True,
-            'man_made': True,
-            'military': True,
-            'aeroway': True,
-            'railway': True,
-            'waterway': True
+            'amenity': True,          # 设施标签
+            'shop': True,             # 商店标签
+            'tourism': True,          # 旅游标签
+            'leisure': True,          # 休闲标签
+            'highway': True,          # 道路标签
+            'building': True,         # 建筑标签
+            'healthcare': True,       # 医疗保健标签
+            'public_transport': True, # 公共交通标签
+            'office': True,           # 办公室标签
+            'craft': True,            # 工艺标签
+            'sport': True,            # 体育标签
+            'religion': True,         # 宗教标签
+            'emergency': True,        # 紧急服务标签
+            'landuse': True,          # 土地利用标签
+            'natural': True,          # 自然标签
+            'man_made': True,         # 人造设施标签
+            'military': True,         # 军事标签
+            'aeroway': True,          # 航空标签
+            'railway': True,          # 铁路标签
+            'waterway': True          # 水路标签
         }
 
         # Columns to keep in the output
