@@ -180,7 +180,7 @@ if __name__ == "__main__":
             "青羊区, 成都市, 四川省, 中国",
         ]
 
-        # OSM tags (unchanged)
+        # OSM tags (unchanged) https://wiki.openstreetmap.org/wiki/Map_features
         tags = {
             'amenity': True,          # 设施标签
             'shop': True,             # 商店标签
