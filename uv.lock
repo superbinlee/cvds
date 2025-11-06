@@ -169,6 +169,7 @@ dependencies = [
     { name = "pandas" },
     { name = "polyline" },
     { name = "spatialite" },
+    { name = "tqdm" },
 ]
 
 [package.metadata]
@@ -182,6 +183,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "polyline", specifier = ">=2.0.3" },
     { name = "spatialite", specifier = ">=0.0.3" },
+    { name = "tqdm", specifier = ">=4.67.1" },
 ]
 
 [[package]]
@@ -936,6 +938,18 @@ source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
 sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/eb/0c/aa040af6021236a6d90739b63eec0cab5541d4492cfb871e73f8d1e4e327/spatialite-0.0.3.tar.gz", hash = "sha256:a0761f239a52f326b14ce41ba61b6614dfcc808b978a0bec4a37c1de9ad9071e", size = 2820, upload-time = "2019-02-25T11:49:15.024Z" }
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/43/5d/ff0c1c7ca9b4d294029f9a2a2a2f668e8e33e7926135d7a86c35d855eb23/spatialite-0.0.3-py3-none-any.whl", hash = "sha256:3124f643688c8ba4e2ff200ef401cf7b57caa44db666cb78519784f98f662982", size = 4184, upload-time = "2019-02-25T11:49:13.308Z" },
+]
+
+[[package]]
+name = "tqdm"
+version = "4.67.1"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/a8/4b/29b4ef32e036bb34e4ab51796dd745cdba7ed47ad142a9f4a1eb8e0c744d/tqdm-4.67.1.tar.gz", hash = "sha256:f8aef9c52c08c13a65f30ea34f4e5aac3fd1a34959879d7e59e63027286627f2", size = 169737, upload-time = "2024-11-24T20:12:22.481Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl", hash = "sha256:26445eca388f82e72884e0d580d5464cd801a3ea01e63e5601bdff9ba6a48de2", size = 78540, upload-time = "2024-11-24T20:12:19.698Z" },
 ]
 
 [[package]]
