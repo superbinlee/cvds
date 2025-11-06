@@ -1,0 +1,33 @@
+# Python 字节码文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境目录（适配 venv、conda 等常见环境）
+venv/
+env/
+*.conda-env/
+.venv/
+
+# 依赖包管理文件（按需提交，此处默认忽略本地安装记录）
+*.egg-info/
+dist/
+build/
+requirements.txt.bak
+
+# 日志与临时文件
+logs/
+*.log
+tmp/
+temp/
+
+# 编辑器配置文件（适配 VS Code、PyCharm 等）
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store  # Mac 系统隐藏文件
+
+# CVDS 项目特有临时数据（模拟数据库生成的测试数据）
+cvds_test_data/
+*.db  # 若使用 SQLite 作为模拟数据库，排除本地数据库文件
