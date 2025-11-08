@@ -1,0 +1,28 @@
+ss4_mock_camera_by_poi_and_roadnet
+
+districts/chengdu_districts_boundary.csv
+其中chengdu_districts_boundary.csv的内容如下：
+区域名称,区域边界
+金牛区,"POLYGON ((103.951446 30.719
+成华区,"POLYGON ((104.0670544 30.71
+郫都区,"POLYGON ((103.7137755 30.86
+新都区,"POLYGON ((103.900652 30.929
+青羊区,"MULTIPOLYGON (((103.8942884
+
+mock_camera_by_poi/cameras_boundary_smart.xlsx
+latitude	longitude	name	camera_id	district	source_type
+30.68747	104.091651	沙河风情	C000000	成华区	Point
+30.686619	104.09158	鹏程苑	C000001	成华区	Point
+30.685738	104.091934	平安馨苑	C000002	成华区	Point
+
+mock_camera_by_roadnet/main_intersections_camera.xlsx
+latitude	longitude	name	camera_id	district	source_type
+30.7504055	104.1121286	主路口-4向	C000001	金牛区	Point
+30.7505436	104.1121468	主路口-4向	C000002	金牛区	Point
+30.7504094	104.1122519	主路口-4向	C000003	金牛区	Point
+
+这个是我项目目录结构：
+
+我希望你可以
+1.合并(不需要去重)cameras_boundary_smart 和 main_intersections_camera 表格输出全部相机的表格，输出全量的表格。
+2.你可以folium绘制 chengdu_districts_boundary 边界 + 合并后的相机点位。输出html.
