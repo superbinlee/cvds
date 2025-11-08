@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-下载成都市行政区边界 → 导出为一个 Excel 文件
-- 输出: ./districts_excel/chengdu_districts_boundary.xlsx
+下载成都市行政区边界 → 导出为一个 CSV 文件
+- 输出: ./districts_excel/chengdu_districts_boundary.csv
 - 每行一个区，包含：区域名称 + 区域边界（WKT Polygon 格式）
 - 来源: OSM Nominatim API
 """
@@ -25,11 +25,10 @@ districts = [
 
 OUTPUT_DIR = Path("./districts_excel")
 OUTPUT_DIR.mkdir(exist_ok=True)
-OUTPUT_FILE = OUTPUT_DIR / "chengdu_districts_boundary.xlsx"
+OUTPUT_FILE = OUTPUT_DIR / "chengdu_districts_boundary.csv"   # ← 改成 .csv
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-HEADERS = {"User-Agent": "district-boundary-excel/1.0"}
-
+HEADERS = {"User-Agent": "district-boundary-csv/1.0"}
 
 # ==================== 下载并提取 WKT 边界 ====================
 def download_district_boundary(place: str):
@@ -38,7 +37,7 @@ def download_district_boundary(place: str):
         "format": "geojson",
         "polygon_geojson": "1",
         "limit": "1",
-        "countrycodes": "cn"
+        "countrycodes": "cn",
     }
     try:
         response = requests.get(NOMINATIM_URL, params=params, headers=HEADERS, timeout=30)
@@ -53,13 +52,13 @@ def download_district_boundary(place: str):
         geom_geojson = feature["geometry"]
         district_name = place.split(",")[0].strip()
 
-        # 将 GeoJSON 转为 Shapely 几何对象 → 再转 WKT
+        # GeoJSON → Shapely → WKT
         geom = shape(geom_geojson)
         if geom.is_empty:
             logger.warning(f"边界为空: {place}")
             return None, None
 
-        wkt = geom.wkt  # 自动处理 Polygon / MultiPolygon
+        wkt = geom.wkt          # 自动处理 Polygon / MultiPolygon
         return district_name, wkt
 
     except Exception as e:
@@ -78,35 +77,27 @@ if __name__ == "__main__":
         if name and wkt:
             results.append({"区域名称": name, "区域边界": wkt})
             success_count += 1
-        time.sleep(1.1)  # Nominatim 限流
+        time.sleep(1.1)   # Nominatim 限流
 
     if not results:
         logger.error("所有区均下载失败！")
         exit(1)
 
-    # 转为 DataFrame 并保存为 Excel
+    # ---------- 保存为 CSV ----------
     df = pd.DataFrame(results)
-    df.to_excel(OUTPUT_FILE, index=False)
-
-    # 设置列宽（可选，需 openpyxl）
-    try:
-        with pd.ExcelWriter(OUTPUT_FILE, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='行政区边界')
-            worksheet = writer.sheets['行政区边界']
-            worksheet.column_dimensions['A'].width = 15
-            worksheet.column_dimensions['B'].width = 100  # WKT 很长
-    except:
-        df.to_excel(OUTPUT_FILE, index=False)  # 降级保存
+    df.to_csv(OUTPUT_FILE, index=False, encoding="utf-8")   # ← CSV
 
     logger.success(f"全部完成！成功导出 {success_count}/{len(districts)} 个区")
-    logger.info(f"Excel 文件已保存: {OUTPUT_FILE.resolve()}")
+    logger.info(f"CSV 文件已保存: {OUTPUT_FILE.resolve()}")
 
-    # 打印预览
+    # ---------- 打印预览 ----------
     print("\n" + "=" * 80)
     print("导出完成！每个区一个 Polygon（WKT 格式）")
     print("=" * 80)
     for _, row in df.iterrows():
-        wkt_preview = row["区域边界"][:70] + "..." if len(row["区域边界"]) > 70 else row["区域边界"]
+        wkt_preview = (
+            row["区域边界"][:70] + "..." if len(row["区域边界"]) > 70 else row["区域边界"]
+        )
         print(f" {row['区域名称']:<6} → {wkt_preview}")
     print(f"\n文件路径: {OUTPUT_FILE.resolve()}")
     print(f"总行数: {len(df)} 行")
