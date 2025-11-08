@@ -15,11 +15,10 @@ from loguru import logger
 
 warnings.filterwarnings("ignore")
 # ==================== 路径配置 ====================
-BASE_DIR = Path("./road")
-INPUT_GPKG = BASE_DIR / "Chengdu_all_road_network.gpkg"
+INPUT_GPKG = Path("./road") / "Chengdu_all_road_network.gpkg"
 INPUT_DISTRICTS = Path('districts') / "chengdu_districts_boundary.csv"
-OUTPUT_EXCEL = BASE_DIR / "main_intersections_camera.xlsx"
-OUTPUT_HTML = BASE_DIR / "main_intersections_map_full.html"
+OUTPUT_EXCEL = Path("./camera") / "main_intersections_camera.xlsx"
+OUTPUT_HTML = Path("./camera") / "main_intersections_map_full.html"
 
 for p in [INPUT_GPKG, INPUT_DISTRICTS]:
     if not p.exists():
