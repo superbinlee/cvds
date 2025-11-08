@@ -1,131 +1,123 @@
-# visualize_csv_with_folium.py
-import pandas as pd
-import geopandas as gpd
-from shapely import wkt
 import folium
-from pathlib import Path
-import random
-import sys
+import pandas as pd
+from shapely.wkt import loads
+from shapely.geometry import Polygon, MultiPolygon
+import warnings
 
-# ==================== 路径 ====================
-CSV_PATH = Path("./chengdu_districts_boundary.csv")
-HTML_PATH = Path("./chengdu_districts_map.html")
-HTML_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-if not CSV_PATH.exists():
-    sys.exit(f"CSV 文件不存在: {CSV_PATH}")
-
-# ==================== 读取 + 解析 WKT ====================
-print("正在读取 CSV ...")
-df = pd.read_csv(CSV_PATH, encoding="utf-8")
-print(f"读取到 {len(df)} 行")
-
-valid_rows = []
-for idx, row in df.iterrows():
-    name = str(row["区域名称"]).strip()
-    wkt_str = str(row["区域边界"]).strip()
-
-    if not wkt_str.upper().startswith(("POLYGON", "MULTIPOLYGON")):
-        print(f"跳过 {name}: WKT 无效")
-        continue
-
-    try:
-        geom = wkt.loads(wkt_str)
-        if geom.is_empty: continue
-        pts = len(geom.exterior.coords) if geom.geom_type == "Polygon" else sum(len(p.exterior.coords) for p in geom.geoms)
-        valid_rows.append({"区域名称": name, "geometry": geom, "点数": pts})
-        print(f"成功 {name}: {pts} 点")
-    except Exception as e:
-        print(f"失败 {name}: {e}")
-
-if not valid_rows:
-    sys.exit("没有有效数据！")
-
-gdf = gpd.GeoDataFrame(valid_rows, geometry="geometry", crs="EPSG:4326")
-print(f"\n成功加载 {len(gdf)} 个行政区")
-
-# ==================== 计算地图中心（投影后）===================
-gdf_utm = gdf.to_crs("EPSG:32648")
-center_utm = gdf_utm.geometry.unary_union.centroid
-center_wgs84 = gdf_utm.to_crs("EPSG:4326").geometry.unary_union.centroid
-center_lat, center_lon = center_wgs84.y, center_wgs84.x
-
-# ==================== 创建地图 ====================
-m = folium.Map(location=[center_lat, center_lon], zoom_start=11, tiles="CartoDB positron")
+warnings.filterwarnings('ignore')  # 忽略 shapely 无关警告
 
 
-# 柔和随机颜色
-def rand_color():
-    return "#%06x" % random.randint(0x88CCFF, 0xFFCC88)
+def draw_district_boundaries(csv_path, output_html="district_boundaries.html"):
+    # 1. 读取 CSV 文件
+    df = pd.read_csv(csv_path)
+    print(f"成功读取 {len(df)} 个区域数据")
+
+    # 校验必要列是否存在
+    required_cols = ["区域名称", "区域边界"]
+    if not all(col in df.columns for col in required_cols):
+        raise ValueError(f"CSV 文件必须包含列：{required_cols}（列名严格匹配）")
+
+    # 2. 初始化地图（以数据中心坐标为中心点）
+    centroids = []
+    for wkt in df["区域边界"]:
+        try:
+            # 尝试解析 WKT（兼容 POLYGON/MULTIPOLYGON）
+            geom = loads(wkt)
+            if isinstance(geom, (Polygon, MultiPolygon)):
+                centroid = geom.centroid
+                centroids.append([centroid.y, centroid.x])  # folium: [lat, lon]
+        except Exception as e:
+            print(f"暂无法解析边界：{str(e)[:50]}...")
+            continue
+
+    # 初始化地图（优先用数据中心，否则用默认成都坐标）
+    if centroids:
+        avg_lat = sum([c[0] for c in centroids]) / len(centroids)
+        avg_lon = sum([c[1] for c in centroids]) / len(centroids)
+        m = folium.Map(location=[avg_lat, avg_lon], zoom_start=12)
+    else:
+        m = folium.Map(location=[30.67, 104.06], zoom_start=11)  # 成都默认中心
+
+    # 3. 定义颜色列表（区分不同区域）
+    colors = [
+        "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FECA57",
+        "#FF9FF3", "#54A0FF", "#5F27CD", "#00D2D3", "#FF9F43",
+        "#10AC84", "#EE5A24", "#0984e3", "#a29bfe", "#fd79a8"
+    ]
+
+    # 4. 遍历区域，绘制边界（兼容单个/多个多边形）
+    for idx, row in df.iterrows():
+        district_name = row["区域名称"].strip()  # 去除名称前后空格
+        wkt_boundary = row["区域边界"].strip()
+
+        try:
+            # 解析 WKT（支持 POLYGON/MULTIPOLYGON）
+            geom = loads(wkt_boundary)
+            color = colors[idx % len(colors)]  # 同一区域的所有子多边形用同一种颜色
+
+            # 处理单个多边形（POLYGON）
+            if isinstance(geom, Polygon):
+                # 提取外环坐标（转换为 folium 要求的 [lat, lon]）
+                coordinates = [[lat, lon] for lon, lat in geom.exterior.coords]
+                # 绘制单个多边形
+                add_polygon_to_map(m, coordinates, color, district_name)
+
+            # 处理多个多边形（MULTIPOLYGON，如飞地）
+            elif isinstance(geom, MultiPolygon):
+                # 遍历每个子多边形，分别绘制
+                for sub_polygon in geom.geoms:
+                    coordinates = [[lat, lon] for lon, lat in sub_polygon.exterior.coords]
+                    add_polygon_to_map(m, coordinates, color, district_name)
+                print(f"成功绘制（多多边形）：{district_name}")
+
+            else:
+                print(f"跳过 {district_name}：不支持的几何类型（{type(geom).__name__}）")
+                continue
+
+            # 标注区域名称（放在整个几何图形的中心）
+            centroid = geom.centroid
+            folium.Marker(
+                location=[centroid.y, centroid.x],
+                icon=folium.DivIcon(
+                    html=f'''<div style="font-size: 12px; color: #333; font-weight: bold; 
+                                  background: rgba(255,255,255,0.8); padding: 2px 5px; 
+                                  border-radius: 3px; border: 1px solid #ddd;">{district_name}</div>''',
+                    icon_size=(120, 30)  # 文本框大小（宽度自适应）
+                )
+            ).add_to(m)
+
+        except Exception as e:
+            # 捕获 WKT 不完整、格式错误等异常
+            error_msg = str(e)[:80]  # 截取部分错误信息
+            print(f"处理 {district_name} 失败：{error_msg}...")
+            continue
+
+    # 5. 添加图层控制（可开关单个区域）
+    folium.LayerControl(collapsed=False).add_to(m)
+
+    # 6. 保存地图
+    m.save(output_html)
+    print(f"\n地图已保存到：{output_html}（用浏览器打开即可查看）")
+    return output_html
 
 
-# ==================== 逐个绘制每个区（独立！）===================
-for idx, row in gdf.iterrows():
-    # 1. 转为 GeoJSON（只包含当前行）
-    feature = {
-        "type": "Feature",
-        "properties": {"name": row["区域名称"]},
-        "geometry": row.geometry.__geo_interface__
-    }
+def add_polygon_to_map(map_obj, coordinates, color, district_name):
+    """辅助函数：向地图添加多边形边界"""
+    folium.Polygon(
+        locations=coordinates,
+        color=color,
+        weight=3,  # 边界线宽度
+        fill=True,
+        fill_color=color,
+        fill_opacity=0.3,  # 填充透明度（避免遮挡其他区域）
+        popup=folium.Popup(district_name, max_width=200),  # 点击显示名称
+        name=district_name  # 图层名称
+    ).add_to(map_obj)
 
-    # 2. 独立上色 + 黑色边框
-    color = rand_color()
-    folium.GeoJson(
-        feature,
-        style_function=lambda x, c=color: {
-            "fillColor": c,
-            "color": "black",
-            "weight": 2.5,
-            "fillOpacity": 0.65,
-        }
-    ).add_to(m)
 
-    # 3. 弹窗
-    folium.Popup(
-        f"<b style='font-size:15px'>{row['区域名称']}</b><br>"
-        f"<small>边界点数: {row['点数']}</small>",
-        max_width=300
-    ).add_to(m)
-
-    # 4. 中心标注区名（清晰、不重叠）
-    centroid = row.geometry.centroid
-    folium.Marker(
-        location=[centroid.y, centroid.x],
-        icon=folium.DivIcon(html=f"""
-            <div style="
-                font-size: 14pt;
-                font-weight: bold;
-                color: #1a1a1a;
-                background: rgba(255,255,255,0.9);
-                padding: 4px 8px;
-                border-radius: 6px;
-                border: 2px solid {color};
-                white-space: nowrap;
-                box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-            ">{row['区域名称']}</div>
-        """),
-        tooltip=row['区域名称']
-    ).add_to(m)
-
-# ==================== 底图切换 ====================
-folium.TileLayer("OpenStreetMap").add_to(m)
-folium.TileLayer("CartoDB dark_matter").add_to(m)
-folium.LayerControl().add_to(m)
-
-# ==================== 标题 ====================
-title_html = f'''
-<h3 align="center" style="margin:15px; font-weight:bold; color:#2c3e50; font-size:18px;">
-    成都市行政区（{len(gdf)} 个区）<br>
-    <small style="color:#7f8c8d;">每个区独立绘制 · 清晰标注</small>
-</h3>
-'''
-m.get_root().html.add_child(folium.Element(title_html))
-
-# ==================== 保存 ====================
-print(f"\n正在保存 → {HTML_PATH}")
-m.save(str(HTML_PATH))
-
-import webbrowser, os
-
-webbrowser.open("file://" + os.path.abspath(HTML_PATH))
-print("地图已生成！浏览器已打开")
+# ------------------- 调用函数 -------------------
+if __name__ == "__main__":
+    # 替换为你的 CSV 文件路径（例如："成都各区边界.csv"）
+    CSV_FILE_PATH = "chengdu_districts_boundary.csv"
+    # 生成地图
+    draw_district_boundaries(CSV_FILE_PATH)
