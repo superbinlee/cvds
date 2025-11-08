@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-下载成都市行政区边界 → 导出为 Excel
-- 输入: districts 列表
-- 输出: ./districts_excel/每个区.xlsx (每行一个边界点)
-- 字段: longitude, latitude
+下载成都市行政区边界 → 导出为一个 Excel 文件
+- 输出: ./districts_excel/chengdu_districts_boundary.xlsx
+- 每行一个区，包含：区域名称 + 区域边界（WKT Polygon 格式）
 - 来源: OSM Nominatim API
 """
+import time
+from pathlib import Path
 
-import geopandas as gpd
 import pandas as pd
 import requests
 from loguru import logger
-from pathlib import Path
+from shapely.geometry import shape
 from tqdm import tqdm
-import time
-from shapely.geometry import Polygon, MultiPolygon
 
 # ==================== 配置 ====================
 districts = [
@@ -25,36 +23,16 @@ districts = [
     "青羊区, 成都市, 四川省, 中国",
 ]
 
-BASE_DIR = Path("./districts_excel")
-BASE_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = Path("./districts_excel")
+OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_FILE = OUTPUT_DIR / "chengdu_districts_boundary.xlsx"
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-HEADERS = {"User-Agent": "district-excel-downloader/1.0"}
+HEADERS = {"User-Agent": "district-boundary-excel/1.0"}
 
 
-# ==================== 提取多边形所有坐标点 ====================
-def extract_coords_from_geometry(geom):
-    """
-    从 Polygon 或 MultiPolygon 提取所有坐标点
-    返回: List[(lon, lat)]
-    """
-    coords = []
-    if isinstance(geom, Polygon):
-        # 外边界
-        for lon, lat in geom.exterior.coords:
-            coords.append((lon, lat))
-        # 内环（洞）
-        for interior in geom.interiors:
-            for lon, lat in interior.coords:
-                coords.append((lon, lat))
-    elif isinstance(geom, MultiPolygon):
-        for poly in geom.geoms:
-            coords.extend(extract_coords_from_geometry(poly))
-    return coords
-
-
-# ==================== 下载并导出 Excel ====================
-def download_and_export_district(place: str, save_path: Path) -> bool:
+# ==================== 下载并提取 WKT 边界 ====================
+def download_district_boundary(place: str):
     params = {
         "q": place,
         "format": "geojson",
@@ -62,76 +40,74 @@ def download_and_export_district(place: str, save_path: Path) -> bool:
         "limit": "1",
         "countrycodes": "cn"
     }
-
     try:
         response = requests.get(NOMINATIM_URL, params=params, headers=HEADERS, timeout=30)
         response.raise_for_status()
+        data = response.json()
 
-        gdf = gpd.read_file(response.text, driver="GeoJSON")
-
-        if gdf.empty or len(gdf.geometry) == 0:
+        if not data.get("features"):
             logger.warning(f"未找到边界: {place}")
-            return False
+            return None, None
 
-        # 取第一个特征（最佳匹配）
-        geom = gdf.geometry.iloc[0]
-        if geom is None or geom.is_empty:
+        feature = data["features"][0]
+        geom_geojson = feature["geometry"]
+        district_name = place.split(",")[0].strip()
+
+        # 将 GeoJSON 转为 Shapely 几何对象 → 再转 WKT
+        geom = shape(geom_geojson)
+        if geom.is_empty:
             logger.warning(f"边界为空: {place}")
-            return False
+            return None, None
 
-        # 提取所有坐标点
-        points = extract_coords_from_geometry(geom)
-        if not points:
-            logger.warning(f"无坐标点: {place}")
-            return False
-
-        # 转为 DataFrame
-        df = pd.DataFrame(points, columns=['longitude', 'latitude'])
-
-        # 保存为 Excel
-        df.to_excel(save_path, index=False)
-
-        logger.success(f"导出成功: {save_path.name} → {len(df):,} 个点")
-        return True
+        wkt = geom.wkt  # 自动处理 Polygon / MultiPolygon
+        return district_name, wkt
 
     except Exception as e:
         logger.error(f"处理失败 {place}: {e}")
-        return False
+        return None, None
 
 
 # ==================== 主流程 ====================
 if __name__ == "__main__":
+    results = []
     success_count = 0
-    total_points = 0
 
-    for place in tqdm(districts, desc="下载并导出行政区", unit="区"):
-        district_name = place.split(",")[0].strip()
-        save_path = BASE_DIR / f"{district_name}.xlsx"
-
-        if download_and_export_district(place, save_path):
+    logger.info("开始下载成都市各区边界（WKT Polygon 格式）...")
+    for place in tqdm(districts, desc="下载行政区", unit="区"):
+        name, wkt = download_district_boundary(place)
+        if name and wkt:
+            results.append({"区域名称": name, "区域边界": wkt})
             success_count += 1
-            # 统计点数
-            try:
-                df_temp = pd.read_excel(save_path)
-                total_points += len(df_temp)
-            except:
-                pass
-
         time.sleep(1.1)  # Nominatim 限流
 
-    logger.info(f"全部完成！成功 {success_count}/{len(districts)} 个区")
-    logger.info(f"总计导出点数: {total_points:,}")
-    logger.info(f"文件保存在: {BASE_DIR.resolve()}")
+    if not results:
+        logger.error("所有区均下载失败！")
+        exit(1)
 
-    # 打印文件列表
-    print("\n" + "=" * 60)
-    print("导出完成！")
-    print("=" * 60)
-    for file in sorted(BASE_DIR.glob("*.xlsx")):
-        try:
-            df = pd.read_excel(file)
-            print(f"  {file.name:<15} → {len(df):>6} 个点")
-        except:
-            print(f"  {file.name:<15} → 读取失败")
-    print(f"\n总点数: {total_points:,}")
-    print("=" * 60)
+    # 转为 DataFrame 并保存为 Excel
+    df = pd.DataFrame(results)
+    df.to_excel(OUTPUT_FILE, index=False)
+
+    # 设置列宽（可选，需 openpyxl）
+    try:
+        with pd.ExcelWriter(OUTPUT_FILE, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='行政区边界')
+            worksheet = writer.sheets['行政区边界']
+            worksheet.column_dimensions['A'].width = 15
+            worksheet.column_dimensions['B'].width = 100  # WKT 很长
+    except:
+        df.to_excel(OUTPUT_FILE, index=False)  # 降级保存
+
+    logger.success(f"全部完成！成功导出 {success_count}/{len(districts)} 个区")
+    logger.info(f"Excel 文件已保存: {OUTPUT_FILE.resolve()}")
+
+    # 打印预览
+    print("\n" + "=" * 80)
+    print("导出完成！每个区一个 Polygon（WKT 格式）")
+    print("=" * 80)
+    for _, row in df.iterrows():
+        wkt_preview = row["区域边界"][:70] + "..." if len(row["区域边界"]) > 70 else row["区域边界"]
+        print(f" {row['区域名称']:<6} → {wkt_preview}")
+    print(f"\n文件路径: {OUTPUT_FILE.resolve()}")
+    print(f"总行数: {len(df)} 行")
+    print("=" * 80)
