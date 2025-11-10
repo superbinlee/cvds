@@ -1,0 +1,31 @@
+请你注意 我已经下载好部分数据，不需要下载全量的，请你基于我下载的数据生成可运行的合理的生成相机布建的代码：
+
+road/Chengdu_all_road_network.gpkg
+解析算法
+def load_road_network(gpkg_path):
+    logger.info("加载路网...")
+    nodes = gpd.read_file(gpkg_path, layer="nodes")
+    edges = gpd.read_file(gpkg_path, layer="edges")
+
+    source_col = "u" if "u" in edges.columns else "source"
+    target_col = "v" if "v" in edges.columns else "target"
+    G = nx.from_pandas_edgelist(edges, source=source_col, target=target_col, create_using=nx.MultiGraph())
+
+    node_id_col = "osmid" if "osmid" in nodes.columns else "id"
+    for _, row in nodes.iterrows():
+        nid = row[node_id_col]
+        if nid in G.nodes:
+            G.nodes[nid]["x"] = row["x"]
+            G.nodes[nid]["y"] = row["y"]
+
+    logger.success(f"加载完成: {G.number_of_nodes():,} 节点, {G.number_of_edges():,} 边")
+    return G
+
+
+districts/chengdu_districts_boundary.csv
+区域名称,区域边界
+金牛区,"POLYGON ((103.951446 30.71983
+成华区,"POLYGON ((104.0670544 30.7103
+郫都区,"POLYGON ((103.7137755 30.8631
+新都区,"POLYGON ((103.900652 30.92976
+青羊区,"MULTIPOLYGON (((103.8942884 3

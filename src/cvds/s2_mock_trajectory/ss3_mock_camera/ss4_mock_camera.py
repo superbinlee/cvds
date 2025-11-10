@@ -1,9 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-主要路口相机部署 + 真实行政区匹配（支持你的CSV格式）+ 可视化
+成都关键路口智能相机部署系统（高效并行版）
+输入：
+  road/Chengdu_all_road_network.gpkg
+  districts/chengdu_districts_boundary.csv
+输出：
+  output/camera/key_intersections_camera.xlsx
+  output/camera/key_intersections_map.html
 """
+
 import warnings
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import List, Dict, Any
 
 import folium
 import geopandas as gpd
@@ -12,20 +21,29 @@ import numpy as np
 import pandas as pd
 from folium.plugins import FastMarkerCluster
 from loguru import logger
+from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
-# ==================== 路径配置 ====================
-INPUT_GPKG = Path("./road") / "Chengdu_all_road_network.gpkg"
-INPUT_DISTRICTS = Path('districts') / "chengdu_districts_boundary.csv"
-OUTPUT_EXCEL = Path("./camera") / "main_intersections_camera.xlsx"
-OUTPUT_HTML = Path("./camera") / "main_intersections_map_full.html"
 
-for p in [INPUT_GPKG, INPUT_DISTRICTS]:
+# ==================== 路径配置 ====================
+ROAD_GPKG = Path("road") / "Chengdu_all_road_network.gpkg"
+DISTRICTS_CSV = Path("districts") / "chengdu_districts_boundary.csv"
+OUTPUT_DIR = Path("output") / "camera"
+OUTPUT_EXCEL = OUTPUT_DIR / "key_intersections_camera.xlsx"
+OUTPUT_HTML = OUTPUT_DIR / "key_intersections_map.html"
+
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+for p in [ROAD_GPKG, DISTRICTS_CSV]:
     if not p.exists():
-        raise FileNotFoundError(f"文件未找到: {p.resolve()}")
+        raise FileNotFoundError(f"文件未找到: {p}")
 
 # ==================== 参数 ====================
 MIN_DEGREE = 3
+CLUSTER_DISTANCE_M = 200
+CORE_DISTRICTS = {"金牛区", "青羊区", "武侯区", "锦江区", "成华区", "高新区", "天府新区"}
+MAX_WORKERS = 6  # 并行线程数
+
 DISTRICT_COLORS = {
     "金牛区": "#FF6B6B", "青羊区": "#4ECDC4", "成华区": "#45B7D1",
     "武侯区": "#96CEB4", "锦江区": "#FECA57", "高新区": "#DDA0DD",
@@ -34,213 +52,267 @@ DISTRICT_COLORS = {
     "其他区": "#95A5A6"
 }
 
+HIGHWAY_RANK = {
+    'motorway': 6, 'trunk': 6, 'primary': 5, 'secondary': 4,
+    'tertiary': 3, 'unclassified': 2, 'residential': 1, 'service': 0
+}
 
-# ==================== 加载行政区边界（修复列名）===================
-def load_districts(districts_path):
-    logger.info(f"加载行政区边界: {districts_path}")
-    df = pd.read_csv(districts_path)
-
-    # 你的真实列名
-    NAME_COL = "区域名称"
-    GEOM_COL = "区域边界"
-
-    if NAME_COL not in df.columns:
-        raise ValueError(f"CSV 必须包含列: '{NAME_COL}'")
-    if GEOM_COL not in df.columns:
-        raise ValueError(f"CSV 必须包含列: '{GEOM_COL}'（WKT 格式）")
-
-    # 清理空格
-    df[NAME_COL] = df[NAME_COL].str.strip()
-    df = df.dropna(subset=[NAME_COL, GEOM_COL])
-
-    gdf = gpd.GeoDataFrame(
-        df[[NAME_COL]],
-        geometry=gpd.GeoSeries.from_wkt(df[GEOM_COL]),
-        crs="EPSG:4326"
-    )
-    gdf = gdf.rename(columns={NAME_COL: 'district'})
-    gdf = gdf[['district', 'geometry']].dropna(subset=['geometry'])
-
-    # 合并相同区的多边形
-    gdf = gdf.dissolve(by='district').reset_index()
-
-    logger.success(f"加载行政区: {len(gdf)} 个 → {list(gdf['district'])}")
-    return gdf
+# ==================== 日志配置 ====================
+logger.remove()
+logger.add(
+    lambda msg: print(msg, end=""),
+    format="<green>{time:HH:mm:ss}</green> | <level>{level}</level> | <cyan>{message}</cyan>",
+    colorize=True
+)
 
 
-# ==================== 加载路网 ====================
-def load_road_network(gpkg_path):
-    logger.info("加载路网...")
-    nodes = gpd.read_file(gpkg_path, layer="nodes")
-    edges = gpd.read_file(gpkg_path, layer="edges")
+# ==================== 1. 加载路网 ====================
+def load_road_network(gpkg_path) -> tuple:
+    logger.info("加载路网节点与边...")
+    with logger.contextualize(step="load_nodes"):
+        nodes = gpd.read_file(gpkg_path, layer="nodes")
+    with logger.contextualize(step="load_edges"):
+        edges = gpd.read_file(gpkg_path, layer="edges")
 
     source_col = "u" if "u" in edges.columns else "source"
     target_col = "v" if "v" in edges.columns else "target"
+    logger.info(f"构建 NetworkX 图 (u={source_col}, v={target_col})...")
     G = nx.from_pandas_edgelist(edges, source=source_col, target=target_col, create_using=nx.MultiGraph())
 
     node_id_col = "osmid" if "osmid" in nodes.columns else "id"
-    for _, row in nodes.iterrows():
+    logger.info("注入坐标 (x, y)...")
+    for _, row in tqdm(nodes.iterrows(), total=len(nodes), desc="注入坐标", leave=False):
         nid = row[node_id_col]
         if nid in G.nodes:
             G.nodes[nid]["x"] = row["x"]
             G.nodes[nid]["y"] = row["y"]
 
-    logger.success(f"加载完成: {G.number_of_nodes():,} 节点, {G.number_of_edges():,} 边")
-    return G
+    logger.success(f"路网加载完成: {G.number_of_nodes():,} 节点, {G.number_of_edges():,} 边")
+    return G, nodes, edges
 
 
-# ==================== 部署相机 + 空间匹配 ====================
-def deploy_main_intersections(G, districts_gdf):
-    logger.info(f"部署主要路口相机（度 ≥ {MIN_DEGREE}）...")
-    degrees = dict(G.degree())
-    main_nodes = [n for n, deg in degrees.items() if deg >= MIN_DEGREE]
+# ==================== 2. 加载行政区 ====================
+def load_districts(csv_path) -> gpd.GeoDataFrame:
+    logger.info(f"加载行政区边界: {csv_path}")
+    df = pd.read_csv(csv_path)
+    df.columns = [c.strip() for c in df.columns]
+    gdf = gpd.GeoDataFrame(
+        df,
+        geometry=gpd.GeoSeries.from_wkt(df["区域边界"]),
+        crs="EPSG:4326"
+    ).rename(columns={'区域名称': 'district'})
+    gdf = gdf[['district', 'geometry']].dropna()
+    gdf = gdf.dissolve(by='district').reset_index()
+    logger.success(f"行政区加载完成: {len(gdf)} 个")
+    return gdf
 
-    points_data = []
-    osmids = []
-    for osmid in main_nodes:
-        x = G.nodes[osmid].get("x")
-        y = G.nodes[osmid].get("y")
-        if x is None or y is None: continue
-        points_data.append((x, y))
-        osmids.append(osmid)
 
-    if not points_data:
-        logger.warning("无有效坐标点")
+# ==================== 3. 并行评分函数 ====================
+def score_node(args) -> Dict[str, Any]:
+    node, G, edges, HIGHWAY_RANK = args
+    x = G.nodes[node].get("x")
+    y = G.nodes[node].get("y")
+    if x is None or y is None:
+        return None
+
+    deg = G.degree[node]
+    if deg < MIN_DEGREE:
+        return None
+
+    neighbor_edges = edges[(edges['u'] == node) | (edges['v'] == node)]
+    if neighbor_edges.empty:
+        return None
+
+    max_rank = neighbor_edges['rank'].max()
+    is_roundabout = neighbor_edges['is_roundabout'].any()
+
+    score = 0
+    if deg >= 5:
+        score += 30
+    elif deg == 4:
+        score += 20
+    elif deg == 3:
+        score += 10
+    if max_rank >= 5:
+        score += 25
+    elif max_rank >= 4:
+        score += 15
+    elif max_rank >= 3:
+        score += 5
+    if is_roundabout: score += 40
+
+    return {
+        'osmid': node, 'x': x, 'y': y,
+        'degree': deg, 'max_rank': max_rank,
+        'is_roundabout': is_roundabout, 'score': score
+    }
+
+
+# ==================== 4. 关键路口识别（并行） ====================
+def deploy_key_intersections(G, edges_gdf, districts_gdf):
+    logger.info("开始关键路口识别（并行评分）...")
+
+    # 预处理 edges
+    edges = edges_gdf.copy()
+    edges['highway'] = edges['highway'].fillna('residential')
+    edges['rank'] = edges['highway'].apply(lambda x: HIGHWAY_RANK.get(str(x).split(';')[0], 0))
+    edges['is_roundabout'] = edges['junction'] == 'roundabout'
+
+    # 准备并行任务
+    tasks = [(node, G, edges, HIGHWAY_RANK) for node in G.nodes()]
+    node_scores = []
+
+    logger.info(f"并行评分 {len(tasks):,} 个节点 (workers={MAX_WORKERS})...")
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(score_node, task) for task in tasks]
+        for future in tqdm(as_completed(futures), total=len(futures), desc="评分进度"):
+            result = future.result()
+            if result:
+                node_scores.append(result)
+
+    if not node_scores:
+        logger.warning("无候选路口")
         return pd.DataFrame()
 
+    scores_df = pd.DataFrame(node_scores)
+    logger.success(f"初步候选: {len(scores_df)} 个")
+
+    # 转为 GeoDataFrame
     points_gdf = gpd.GeoDataFrame(
-        {'osmid': osmids},
-        geometry=gpd.points_from_xy([p[0] for p in points_data], [p[1] for p in points_data]),
+        scores_df,
+        geometry=gpd.points_from_xy(scores_df['x'], scores_df['y']),
         crs="EPSG:4326"
     )
 
-    logger.info("执行空间连接：匹配点到行政区...")
+    # 行政区匹配
+    logger.info("空间连接：匹配行政区...")
     joined = gpd.sjoin(points_gdf, districts_gdf, how="left", predicate="within")
     joined['district'] = joined['district'].fillna("其他区")
+    joined['is_core'] = joined['district'].isin(CORE_DISTRICTS)
+    joined['score'] = joined['score'] + joined['is_core'].apply(lambda x: 20 if x else 0)
 
+    # 空间去重
+    logger.info(f"空间去重（{CLUSTER_DISTANCE_M}m 内最高分）...")
+    joined = joined.sort_values('score', ascending=False)
+    buffer_gdf = joined.copy()
+    buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(CLUSTER_DISTANCE_M / 111320)
+    selected = []
+    used = set()
+    for idx, row in tqdm(buffer_gdf.iterrows(), total=len(buffer_gdf), desc="去重进度"):
+        if idx in used: continue
+        candidates = buffer_gdf[buffer_gdf.geometry.overlaps(row.geometry)]
+        best = candidates.loc[candidates['score'].idxmax()]
+        selected.append(best)
+        used.update(candidates.index)
+
+    final_gdf = gpd.GeoDataFrame(selected, crs="EPSG:4326").reset_index(drop=True)
+    logger.success(f"最终关键路口: {len(final_gdf)} 个")
+
+    # 生成相机
     cameras = []
-    camera_counter = 0
-    for _, row in joined.iterrows():
-        osmid = row['osmid']
-        x, y = G.nodes[osmid]["x"], G.nodes[osmid]["y"]
-        district = row['district']
-
-        directions = set()
-        for _, v, _, _ in G.edges(osmid, keys=True, data=True):
-            if v == osmid: continue
-            vx, vy = G.nodes[v].get("x"), G.nodes[v].get("y")
-            if vx is None: continue
-            dx, dy = vx - x, vy - y
-            if abs(dx) < 1e-8 and abs(dy) < 1e-8: continue
-            bearing = np.degrees(np.arctan2(dy, dx)) % 360
-            dir_bin = round(bearing / 90) * 90
-            directions.add(dir_bin)
-
-        camera_counter += 1
+    for i, row in final_gdf.iterrows():
+        name = "关键路口"
+        if row['is_roundabout']: name = "环岛路口"
+        if row['max_rank'] >= 5: name = "主干道-" + name
+        name += f"-{row['degree']}向"
         cameras.append({
-            'camera_id': f"C{camera_counter:06d}",
-            'name': f"主路口-{len(directions)}向",
-            'longitude': x,
-            'latitude': y,
-            'district': district,
-            'source_type': 'Point'
+            'camera_id': f"C{i + 1:06d}",
+            'name': name,
+            'longitude': row['x'],
+            'latitude': row['y'],
+            'district': row['district'],
+            'source_type': 'KeyIntersection',
+            'score': int(row['score'])
         })
 
     df = pd.DataFrame(cameras)
-    logger.success(f"部署完成: {len(df):,} 个相机")
+    logger.success(f"相机部署完成: {len(df)} 个")
     return df
 
 
-# ==================== 生成地图（相机 + 行政区） ====================
-def create_full_map(df_cameras, districts_gdf, output_path):
+# ==================== 5. 生成地图 ====================
+def create_map(df_cameras, districts_gdf):
     if df_cameras.empty:
-        logger.warning("无相机数据，跳过地图")
+        logger.warning("无相机，跳过地图")
         return
 
-    logger.info(f"生成地图（{len(df_cameras):,} 相机 + {len(districts_gdf):,} 区）→ {output_path}")
+    logger.info("生成交互地图...")
     center = [df_cameras['latitude'].mean(), df_cameras['longitude'].mean()]
     m = folium.Map(location=center, zoom_start=11, tiles='CartoDB positron')
 
-    # === 行政区边界 ===
+    # 行政区
     for _, row in districts_gdf.iterrows():
-        district = row['district']
-        color = DISTRICT_COLORS.get(district, "#95A5A6")
+        color = DISTRICT_COLORS.get(row['district'], "#95A5A6")
         folium.GeoJson(
             row['geometry'],
-            style_function=lambda x, c=color, d=district: {
-                'fillColor': c,
-                'color': 'black',
-                'weight': 1.5,
-                'fillOpacity': 0.3,
-            },
-            tooltip=folium.Tooltip(f"<b>{district}</b>", sticky=True),
-            name=f"行政区: {district}"
+            style_function=lambda x, c=color: {'fillColor': c, 'color': 'black', 'weight': 1.5, 'fillOpacity': 0.3},
+            tooltip=folium.Tooltip(f"<b>{row['district']}</b>")
         ).add_to(m)
 
-    # === 相机点（聚类）===
-    marker_cluster = FastMarkerCluster(
-        data=list(zip(df_cameras.latitude, df_cameras.longitude)),
-        name="主要路口相机"
-    ).add_to(m)
-
+    # 相机点
+    cluster = FastMarkerCluster(data=list(zip(df_cameras.latitude, df_cameras.longitude)), name="关键路口相机").add_to(m)
+    min_score = df_cameras['score'].min()
+    max_score = df_cameras['score'].max()
     for _, row in df_cameras.iterrows():
+        radius = 4 + 6 * (row['score'] - min_score) / (max_score - min_score + 1)
         folium.CircleMarker(
             location=[row['latitude'], row['longitude']],
-            radius=4,
-            color="red",
-            fill=True,
-            fill_color="red",
-            fill_opacity=0.9,
+            radius=radius, color="red", fill=True, fill_color="red", fill_opacity=0.9,
             popup=folium.Popup(
-                f"<b>{row['name']}</b><br>"
-                f"ID: {row['camera_id']}<br>"
-                f"区: {row['district']}",
+                f"<b>{row['name']}</b><br>ID: {row['camera_id']}<br>区: {row['district']}<br>评分: {row['score']}",
                 max_width=200
             )
-        ).add_to(marker_cluster)
+        ).add_to(cluster)
 
-    # === 图层控制 + 图例 ===
     folium.LayerControl().add_to(m)
 
+    # 图例
     legend_html = '''
-    <div style="position: fixed; bottom: 50px; left: 50px; width: 190px; height: auto; 
-                border:2px solid grey; z-index:9999; font-size:14px; background:white; padding: 10px;
-                border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.2);">
-      <b style="font-size:16px;">图例</b><br>
-      <i class="fa fa-circle" style="color:red"></i>&nbsp;主要路口相机 (度≥3)<br>
+    <div style="position: fixed; bottom: 50px; left: 50px; width: 220px; padding: 10px; 
+                background: white; border: 2px solid grey; border-radius: 8px; font-size: 14px; z-index: 9999;">
+      <b>图例</b><br>
+      <i class="fa fa-circle" style="color:red"></i> 关键路口相机 (大小=重要性)<br>
       <small>缩放查看聚类</small><hr style="margin:5px 0;">
-      <small><b>行政区边界</b></small><br>
+      <b>行政区</b><br>
     '''
     for d, c in DISTRICT_COLORS.items():
         if d in districts_gdf['district'].values:
-            legend_html += f'<i style="background:{c}; width:12px; height:12px; display:inline-block; border:1px solid #666;"></i>&nbsp;{d}<br>'
+            legend_html += f'<i style="background:{c}; width:12px; height:12px; display:inline-block; border:1px solid #666;"></i> {d}<br>'
     legend_html += '</div>'
     m.get_root().html.add_child(folium.Element(legend_html))
 
-    m.save(str(output_path))
-    logger.success(f"地图保存: {output_path}")
+    m.save(str(OUTPUT_HTML))
+    logger.success(f"地图已保存: {OUTPUT_HTML}")
 
 
-# ==================== 主流程 ====================
+# ==================== 主程序 ====================
 if __name__ == "__main__":
-    G = load_road_network(INPUT_GPKG)
-    districts_gdf = load_districts(INPUT_DISTRICTS)
-    df = deploy_main_intersections(G, districts_gdf)
+    logger.info("成都关键路口智能相机部署系统（高效并行版）")
 
-    if not df.empty:
-        df_out = df[['latitude', 'longitude', 'name', 'camera_id', 'district', 'source_type']]
+    # 1. 加载数据
+    G, nodes_gdf, edges_gdf = load_road_network(ROAD_GPKG)
+    districts_gdf = load_districts(DISTRICTS_CSV)
+
+    # 2. 部署
+    df_cameras = deploy_key_intersections(G, edges_gdf, districts_gdf)
+
+    # 3. 输出
+    if not df_cameras.empty:
+        df_out = df_cameras[['latitude', 'longitude', 'name', 'camera_id', 'district', 'source_type']]
         df_out.to_excel(OUTPUT_EXCEL, index=False)
-        logger.success(f"Excel 保存: {OUTPUT_EXCEL}，共 {len(df_out):,} 条")
+        logger.success(f"Excel 已保存: {OUTPUT_EXCEL}")
 
-    create_full_map(df, districts_gdf, OUTPUT_HTML)
+    create_map(df_cameras, districts_gdf)
 
-    print("\n" + "=" * 60)
-    print("主要路口相机部署完成！")
-    print("=" * 60)
-    print(f"相机总数: {len(df):,}")
-    print(f"\n各区分布:")
-    print(df['district'].value_counts().to_string() if not df.empty else "无")
+    # 4. 统计
+    print("\n" + "=" * 70)
+    print("关键路口相机部署完成！")
+    print("=" * 70)
+    print(f"相机总数: {len(df_cameras):,}")
+    if not df_cameras.empty:
+        print(f"\n各区分布 (Top 10):")
+        print(df_cameras['district'].value_counts().head(10).to_string())
     print(f"\n输出文件:")
     print(f" Excel: {OUTPUT_EXCEL}")
     print(f" 地图: {OUTPUT_HTML}")
-    print("=" * 60)
+    print("=" * 70)
