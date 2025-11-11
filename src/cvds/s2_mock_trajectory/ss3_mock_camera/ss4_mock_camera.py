@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-成都智能相机部署系统（生产级 · 优化版）
+成都智能相机部署系统（生产级 · 最终版）
+作者: @lucky_binlee
+时间: 2025-11-10
 输入：
   road/Chengdu_all_road_network.gpkg
   districts/chengdu_districts_boundary.csv
@@ -39,9 +41,10 @@ for p in [ROAD_GPKG, DISTRICTS_CSV]:
 MIN_DEGREE = 3
 CORE_DISTRICTS = {"金牛区", "青羊区", "武侯区", "锦江区", "成华区", "高新区", "天府新区"}
 INCLUDE_TERTIARY = True
+UNIFIED_BUFFER_M = 1000  # 统一去重半径
 
 # 动态间距（米）
-SPACING_RULE = {6: 300, 5: 300, 4: 400, 3: 1000}
+SPACING_RULE = {6: 400, 5: 400, 4: 600, 3: 1200}
 
 DISTRICT_COLORS = {
     "金牛区": "#FF6B6B", "青羊区": "#4ECDC4", "成华区": "#45B7D1",
@@ -63,7 +66,6 @@ logger.add(
     format="<green>{time:HH:mm:ss}</green> | <level>{level}</level> | <cyan>{message}</cyan>",
     colorize=True
 )
-
 
 # ==================== 1. 加载路网 ====================
 def load_road_network(gpkg_path):
@@ -87,7 +89,6 @@ def load_road_network(gpkg_path):
     logger.success(f"路网加载完成: {G.number_of_nodes():,} 节点, {G.number_of_edges():,} 边")
     return G, nodes, edges
 
-
 # ==================== 2. 加载行政区 ====================
 def load_districts(csv_path):
     logger.info(f"加载行政区: {csv_path}")
@@ -104,10 +105,9 @@ def load_districts(csv_path):
     logger.success(f"行政区加载完成: {len(gdf)} 个")
     return gdf
 
-
-# ==================== 3. 智能相机部署（全局去重） ====================
+# ==================== 3. 智能相机部署（统一去重 + 支路保护） ====================
 def deploy_key_intersections(G, edges_gdf, districts_gdf):
-    logger.info("开始智能相机部署（全局去重 + 动态间距）...")
+    logger.info("开始智能相机部署（统一去重 + 支路保护）...")
 
     edges = edges_gdf.copy()
     edges['highway'] = edges['highway'].fillna('residential')
@@ -138,14 +138,17 @@ def deploy_key_intersections(G, edges_gdf, districts_gdf):
         if max_rank < 3: continue
         if max_rank == 3 and not INCLUDE_TERTIARY: continue
 
-        spacing = SPACING_RULE.get(max_rank, 1000)
+        spacing = SPACING_RULE.get(max_rank, 1200)
         is_roundabout = neighbor_edges['is_roundabout'].any()
+
+        # 优先级：间距越大越优先（保护支路）
+        priority = spacing * 10 + max_rank
 
         candidates.append({
             'osmid': node, 'x': x, 'y': y,
             'degree': deg, 'max_rank': max_rank,
             'highway': highway_type, 'is_roundabout': is_roundabout,
-            'spacing': spacing, 'priority': max_rank * 100 + deg
+            'spacing': spacing, 'priority': priority
         })
 
     if not candidates:
@@ -165,15 +168,14 @@ def deploy_key_intersections(G, edges_gdf, districts_gdf):
     joined = gpd.sjoin(gdf, districts_gdf, how="left", predicate="within")
     joined['district'] = joined['district'].fillna("其他区")
 
-    # 全局去重（按优先级）
+    # 统一去重（1000m 半径）
     joined = joined.sort_values('priority', ascending=False)
     buffer_gdf = joined.copy()
-    buffer_gdf['buffer_dist'] = buffer_gdf['spacing'] / 111320
-    buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(buffer_gdf['buffer_dist'])
+    buffer_gdf['geometry'] = buffer_gdf.geometry.buffer(UNIFIED_BUFFER_M / 111320)
 
     selected = []
     used = set()
-    for idx in tqdm(buffer_gdf.index, desc="全局去重", leave=False):
+    for idx in tqdm(buffer_gdf.index, desc="统一去重", leave=False):
         if idx in used: continue
         row = buffer_gdf.loc[idx]
         if pd.isna(row.geometry): continue
@@ -190,18 +192,14 @@ def deploy_key_intersections(G, edges_gdf, districts_gdf):
     cameras = []
     for i, row in final_gdf.iterrows():
         name = ""
-        if row['is_roundabout']:
-            name = "环岛"
-        elif row['max_rank'] >= 5:
-            name = "主干道"
-        elif row['max_rank'] == 4:
-            name = "次干道"
-        else:
-            name = "重要支路"
+        if row['is_roundabout']: name = "环岛"
+        elif row['max_rank'] >= 5: name = "主干道"
+        elif row['max_rank'] == 4: name = "次干道"
+        else: name = "重要支路"
         name += f"-{row['degree']}向"
 
         cameras.append({
-            'camera_id': f"C{i + 1:06d}",
+            'camera_id': f"C{i+1:06d}",
             'name': name,
             'longitude': row['x'],
             'latitude': row['y'],
@@ -214,7 +212,6 @@ def deploy_key_intersections(G, edges_gdf, districts_gdf):
     result_df = pd.DataFrame(cameras)
     logger.success(f"相机部署完成: {len(result_df)} 个")
     return result_df
-
 
 # ==================== 4. 生成地图 ====================
 def create_map(df_cameras, districts_gdf):
@@ -260,12 +257,12 @@ def create_map(df_cameras, districts_gdf):
 
     # 图例
     legend_html = '''
-    <div style="position: fixed; bottom: 50px; left: 50px; width: 180px; padding: 10px; 
+    <div style="position: fixed; bottom: 50px; left: 50px; width: 200px; padding: 10px; 
                 background: white; border: 2px solid grey; border-radius: 8px; font-size: 14px; z-index: 9999;">
-      <b>图例</b><br>
-      <i class="fa fa-circle" style="color:#DC143C"></i> 主干道 (300m)<br>
-      <i class="fa fa-circle" style="color:#32CD32"></i> 次干道 (400m)<br>
-      <i class="fa fa-circle" style="color:#1E90FF"></i> 支路 (1000m)<br>
+      <b>智能相机图例</b><br>
+      <i class="fa fa-circle" style="color:#DC143C"></i> 主干道 (400m)<br>
+      <i class="fa fa-circle" style="color:#32CD32"></i> 次干道 (600m)<br>
+      <i class="fa fa-circle" style="color:#1E90FF"></i> 支路 (1200m)<br>
       <small>缩放查看聚类</small>
     </div>
     '''
@@ -274,10 +271,9 @@ def create_map(df_cameras, districts_gdf):
     m.save(str(OUTPUT_HTML))
     logger.success(f"地图已保存: {OUTPUT_HTML}")
 
-
 # ==================== 主程序 ====================
 if __name__ == "__main__":
-    logger.info("成都智能相机部署系统（生产级 · 优化版）")
+    logger.info("成都智能相机部署系统（生产级 · 最终版）")
 
     G, nodes_gdf, edges_gdf = load_road_network(ROAD_GPKG)
     districts_gdf = load_districts(DISTRICTS_CSV)
@@ -290,9 +286,9 @@ if __name__ == "__main__":
 
     create_map(df_cameras, districts_gdf)
 
-    print("\n" + "=" * 70)
+    print("\n" + "="*70)
     print("智能相机部署完成！")
-    print("=" * 70)
+    print("="*70)
     print(f"相机总数: {len(df_cameras):,}")
     if not df_cameras.empty:
         print(f"\n分层分布:")
@@ -300,4 +296,4 @@ if __name__ == "__main__":
     print(f"\n输出文件:")
     print(f" Excel: {OUTPUT_EXCEL}")
     print(f" 地图: {OUTPUT_HTML}")
-    print("=" * 70)
+    print("="*70)
