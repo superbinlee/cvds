@@ -1,0 +1,52 @@
+行政区区域边界数据：
+../districts/chengdu_districts_boundary.csv
+其中chengdu_districts_boundary.csv的内容如下：
+区域名称,区域边界
+金牛区,"POLYGON ((103.951446 30.719
+成华区,"POLYGON ((104.0670544 30.71
+郫都区,"POLYGON ((103.7137755 30.86
+新都区,"POLYGON ((103.900652 30.929
+青羊区,"MULTIPOLYGON (((103.8942884
+
+相机点位数据：
+../cameras_all.xlsx
+latitude	longitude	name	camera_id	district	source_type	source
+30.68747	104.091651	沙河风情	C000000	成华区	Point	poi
+30.686619	104.09158	鹏程苑	C000001	成华区	Point	poi
+30.685738	104.091934	平安馨苑	C000002	成华区	Point	poi
+30.681556	104.091307	蓝泰公寓	C000003	成华区	Point	poi
+
+路网数据：
+../roadnet/Chengdu_all_road_network.gpkg
+加载数据方法
+def load_road_network(gpkg_path):
+    logger.info("加载路网...")
+    nodes = gpd.read_file(gpkg_path, layer="nodes")
+    edges = gpd.read_file(gpkg_path, layer="edges")
+
+    source_col = "u" if "u" in edges.columns else "source"
+    target_col = "v" if "v" in edges.columns else "target"
+    logger.info(f"构建 NetworkX 图 (u={source_col}, v={target_col})...")
+    G = nx.from_pandas_edgelist(edges, source=source_col, target=target_col, create_using=nx.MultiGraph())
+
+    node_id_col = "osmid" if "osmid" in nodes.columns else "id"
+    logger.info("注入坐标...")
+    for _, row in tqdm(nodes.iterrows(), total=len(nodes), desc="注入坐标", leave=False):
+        nid = row[node_id_col]
+        if nid in G.nodes:
+            G.nodes[nid]["x"] = row["x"]
+            G.nodes[nid]["y"] = row["y"]
+
+    logger.success(f"路网加载完成: {G.number_of_nodes():,} 节点, {G.number_of_edges():,} 边")
+    return G, nodes, edges
+
+
+需求：
+我需要你根据上述数据生成每个相机点的方向，最终相机方向到对齐到路网中路的方向上。
+
+输出1：
+../cameras_all_with_directions.xlsx
+增加一列描述方向
+
+输出2:
+使用folium绘制 chengdu_districts_boundary 边界 + 合并后的相机点位。输出html.
