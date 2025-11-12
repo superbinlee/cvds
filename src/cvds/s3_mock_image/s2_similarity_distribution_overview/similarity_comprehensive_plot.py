@@ -6,13 +6,13 @@ from sklearn.metrics.pairwise import cosine_similarity
 def generate_similarity_data():
     # 基于您之前提供的统计数据生成模拟数据
     sim_by_label = {
-        'same_high': np.random.normal(0.8510, 0.0510, 10000).clip(0, 1),  # 相同人高相似度
+        'same_high': np.random.normal(0.8610, 0.0510, 10000).clip(0, 1),  # 相同人高相似度
         'same_low': np.random.normal(0.6801, 0.0489, 10000).clip(0, 1),  # 相同人低相似度
 
         'diff_high': np.random.normal(0.7536, 0.0314, 10000).clip(0, 1),  # 不同人高相似度
         'diff_low': np.random.normal(0.4643, 0.0633, 10000).clip(0, 1),  # 不同人低相似度
 
-        'confuser': np.random.normal(0.7855, 0.0409, 10000).clip(0, 1)  # 混淆样本
+        'confuser': np.random.normal(0.7855, 0.0209, 5000).clip(0, 1)  # 混淆样本
     }
 
     # 确保每个类别的最小值和最大值符合统计数据
