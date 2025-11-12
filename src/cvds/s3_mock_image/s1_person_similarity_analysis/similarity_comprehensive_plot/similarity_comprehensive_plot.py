@@ -9,7 +9,7 @@ def generate_similarity_data():
         'same_high': np.random.normal(0.8510, 0.0510, 10000).clip(0, 1),  # 相同人高相似度
         'same_low': np.random.normal(0.6801, 0.0489, 10000).clip(0, 1),  # 相同人低相似度
 
-        'diff_high': np.random.normal(0.8036, 0.0314, 10000).clip(0, 1),  # 不同人高相似度
+        'diff_high': np.random.normal(0.7536, 0.0314, 10000).clip(0, 1),  # 不同人高相似度
         'diff_low': np.random.normal(0.4643, 0.0633, 10000).clip(0, 1),  # 不同人低相似度
 
         'confuser': np.random.normal(0.7855, 0.0409, 10000).clip(0, 1)  # 混淆样本
