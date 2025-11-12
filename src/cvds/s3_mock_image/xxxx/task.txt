@@ -114,3 +114,14 @@ DIMENSIONS = {
         生成的向量是否符合约束中定义的分布
         向量比对的结果是否符合约束中定义的分布
 
+
+
+
+人脸向量生成：
+    # 人脸 (6维)
+    "face_shape":     {"size": 80,  "weight": 0.35},
+    "skin_tone":      {"size": 40,  "weight": 0.15},
+    "eye_nose":       {"size": 60,  "weight": 0.25},
+    "lighting":       {"size": 30,  "weight": 0.10},
+    "glasses":        {"size": 20,  "weight": 0.05},
+    "expression":     {"size": 30,  "weight": 0.10},
