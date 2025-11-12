@@ -293,7 +293,7 @@ if __name__ == '__main__':
         data_for_plot = [sim_by_label[label] for label in labels_for_plot if label in sim_by_label]
         labels_for_plot = [label for label in labels_for_plot if label in sim_by_label]
 
-        plt.boxplot(data_for_plot, labels=labels_for_plot, patch_artist=True)
+        plt.boxplot(data_for_plot, tick_labels=labels_for_plot, patch_artist=True)
         plt.title('不同类型向量与目标向量的相似度分布（调整后）')
         plt.ylabel('加权余弦相似度')
         plt.grid(True, linestyle='--', alpha=0.7)
