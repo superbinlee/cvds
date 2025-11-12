@@ -3,6 +3,23 @@ import matplotlib
 
 # 设置matplotlib使用非交互式后端，适用于服务器环境或无图形界面情况
 matplotlib.use('Agg')
+
+# 配置matplotlib字体以支持中文显示
+plt_font_families = ['SimHei', 'WenQuanYi Micro Hei', 'Heiti TC', 'Microsoft YaHei']
+plt_font_set = False
+for font in plt_font_families:
+    try:
+        matplotlib.rcParams['font.sans-serif'] = [font]
+        matplotlib.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+        plt_font_set = True
+        break
+    except:
+        continue
+
+# 如果没有找到合适的中文字体，至少尝试设置默认字体
+if not plt_font_set:
+    matplotlib.rcParams['axes.unicode_minus'] = False
+
 from sklearn.metrics.pairwise import cosine_similarity
 
 # ---------------------- 1. 特征维度与权重配置 ----------------------
